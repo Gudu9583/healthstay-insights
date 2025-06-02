@@ -1,0 +1,754 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import plotly.figure_factory as ff
+from datetime import datetime, timedelta
+import warnings
+warnings.filterwarnings('ignore')
+
+# Set style for better visualizations
+plt.style.use('seaborn-v0_8-darkgrid')
+sns.set_palette("husl")
+
+class HealthStayVisualizationDashboard:
+    """
+    Comprehensive healthcare data visualization dashboard
+    """
+    
+    def __init__(self):
+        self.data = None
+        self.generate_sample_data()
+    
+    def generate_sample_data(self):
+        """Generate realistic healthcare dataset for visualization"""
+        np.random.seed(42)
+        n_samples = 8000
+        
+        # Generate dates
+        dates = pd.date_range('2022-01-01', '2023-12-31', freq='D')
+        admission_dates = np.random.choice(dates, n_samples)
+        
+        # Patient demographics
+        ages = np.random.normal(67, 18, n_samples).clip(18, 95)
+        genders = np.random.choice(['Male', 'Female'], n_samples, p=[0.47, 0.53])
+        
+        # Clinical conditions
+        diabetes = np.random.choice([0, 1], n_samples, p=[0.68, 0.32])
+        hypertension = np.random.choice([0, 1], n_samples, p=[0.55, 0.45])
+        heart_disease = np.random.choice([0, 1], n_samples, p=[0.72, 0.28])
+        copd = np.random.choice([0, 1], n_samples, p=[0.85, 0.15])
+        kidney_disease = np.random.choice([0, 1], n_samples, p=[0.88, 0.12])
+        
+        # Healthcare metrics
+        previous_admissions = np.random.poisson(1.5, n_samples)
+        emergency_visits = np.random.poisson(2, n_samples)
+        
+        # Length of stay with realistic distribution
+        base_los = np.random.exponential(3.5, n_samples)
+        age_modifier = (ages > 70) * 1.8 + (ages > 80) * 1.2
+        condition_modifier = diabetes * 1.3 + hypertension * 1.1 + heart_disease * 1.6 + copd * 1.8
+        length_of_stay = (base_los + age_modifier + condition_modifier).clip(1, 45)
+        
+        # Service lines
+        service_lines = np.random.choice([
+            'Cardiology', 'Internal Medicine', 'Surgery', 'Orthopedics', 
+            'Pulmonology', 'Nephrology', 'Gastroenterology', 'Neurology'
+        ], n_samples, p=[0.18, 0.25, 0.15, 0.12, 0.08, 0.07, 0.08, 0.07])
+        
+        # Insurance types
+        insurance_types = np.random.choice([
+            'Medicare', 'Medicaid', 'Commercial', 'Self-Pay', 'Other'
+        ], n_samples, p=[0.42, 0.23, 0.28, 0.04, 0.03])
+        
+        # Admission types
+        admission_types = np.random.choice(['Emergency', 'Elective', 'Urgent'], 
+                                         n_samples, p=[0.52, 0.35, 0.13])
+        
+        # Calculate charges
+        base_charge = np.random.normal(15000, 5000, n_samples).clip(5000, 100000)
+        charge_multiplier = (
+            1 + (length_of_stay - 3) * 0.15 +
+            diabetes * 0.2 + heart_disease * 0.3 + copd * 0.25 +
+            (service_lines == 'Surgery') * 0.4 +
+            (admission_types == 'Emergency') * 0.15
+        )
+        total_charges = base_charge * charge_multiplier
+        
+        # Readmission calculation
+        risk_score = (
+            (ages > 75) * 0.25 +
+            (previous_admissions > 2) * 0.20 +
+            diabetes * 0.15 +
+            heart_disease * 0.20 +
+            copd * 0.25 +
+            kidney_disease * 0.18 +
+            (length_of_stay > 7) * 0.15 +
+            (admission_types == 'Emergency') * 0.10 +
+            (insurance_types == 'Medicaid') * 0.08 +
+            (emergency_visits > 3) * 0.12
+        )
+        
+        readmission_prob = 1 / (1 + np.exp(-(risk_score - 0.6 + np.random.normal(0, 0.2, n_samples))))
+        readmission_30_days = (np.random.random(n_samples) < readmission_prob).astype(int)
+        
+        # Patient satisfaction
+        satisfaction_base = np.random.normal(7.5, 1.5, n_samples).clip(1, 10)
+        satisfaction_modifier = -(readmission_30_days * 1.2) - (length_of_stay > 10) * 0.8
+        patient_satisfaction = (satisfaction_base + satisfaction_modifier).clip(1, 10)
+        
+        # Create dataset
+        self.data = pd.DataFrame({
+            'patient_id': range(10001, 10001 + n_samples),
+            'admission_date': admission_dates,
+            'age': ages.round().astype(int),
+            'gender': genders,
+            'insurance_type': insurance_types,
+            'service_line': service_lines,
+            'admission_type': admission_types,
+            'length_of_stay': length_of_stay.round().astype(int),
+            'total_charges': total_charges.round(2),
+            'diabetes': diabetes,
+            'hypertension': hypertension,
+            'heart_disease': heart_disease,
+            'copd': copd,
+            'kidney_disease': kidney_disease,
+            'previous_admissions_12m': previous_admissions,
+            'emergency_visits_12m': emergency_visits,
+            'patient_satisfaction': patient_satisfaction.round(1),
+            'readmission_30_days': readmission_30_days
+        })
+        
+        # Add derived fields
+        self.data['admission_month'] = pd.to_datetime(self.data['admission_date']).dt.month
+        self.data['admission_year'] = pd.to_datetime(self.data['admission_date']).dt.year
+        self.data['age_group'] = pd.cut(self.data['age'], bins=[0, 50, 65, 75, 85, 100], 
+                                      labels=['<50', '50-64', '65-74', '75-84', '85+'])
+        self.data['condition_count'] = (self.data['diabetes'] + self.data['hypertension'] + 
+                                      self.data['heart_disease'] + self.data['copd'] + self.data['kidney_disease'])
+    
+    def create_executive_dashboard(self):
+        """Create executive-level KPI dashboard"""
+        fig, axes = plt.subplots(2, 3, figsize=(20, 12))
+        fig.suptitle('HealthStay Analytics - Executive Dashboard', fontsize=20, fontweight='bold')
+        
+        # KPI Cards
+        kpi_data = {
+            'Total Admissions': len(self.data),
+            'Readmission Rate': f"{self.data['readmission_30_days'].mean():.1%}",
+            'Avg Length of Stay': f"{self.data['length_of_stay'].mean():.1f} days",
+            'Avg Total Charges': f"${self.data['total_charges'].mean():,.0f}",
+            'Patient Satisfaction': f"{self.data['patient_satisfaction'].mean():.1f}/10",
+            'High-Risk Patients': f"{(self.data['condition_count'] >= 3).sum():,}"
+        }
+        
+        # 1. Monthly Admission Trends
+        monthly_data = self.data.groupby(pd.to_datetime(self.data['admission_date']).dt.to_period('M')).agg({
+            'patient_id': 'count',
+            'readmission_30_days': 'mean'
+        })
+        
+        ax1 = axes[0, 0]
+        ax1_twin = ax1.twinx()
+        
+        line1 = ax1.plot(monthly_data.index.astype(str), monthly_data['patient_id'], 
+                        color='steelblue', marker='o', linewidth=3, markersize=6, label='Admissions')
+        line2 = ax1_twin.plot(monthly_data.index.astype(str), monthly_data['readmission_30_days'] * 100, 
+                             color='red', marker='s', linewidth=3, markersize=6, label='Readmission %')
+        
+        ax1.set_title('Monthly Admission Volume & Readmission Trends', fontweight='bold', fontsize=12)
+        ax1.set_ylabel('Number of Admissions', color='steelblue')
+        ax1_twin.set_ylabel('Readmission Rate (%)', color='red')
+        ax1.tick_params(axis='x', rotation=45)
+        ax1.grid(True, alpha=0.3)
+        
+        # 2. Readmission Rate by Age Group
+        age_readmission = self.data.groupby('age_group')['readmission_30_days'].mean() * 100
+        
+        bars = axes[0, 1].bar(age_readmission.index, age_readmission.values, 
+                             color=['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7'], alpha=0.8)
+        axes[0, 1].set_title('Readmission Rate by Age Group', fontweight='bold', fontsize=12)
+        axes[0, 1].set_ylabel('Readmission Rate (%)')
+        axes[0, 1].grid(axis='y', alpha=0.3)
+        
+        # Add value labels on bars
+        for bar in bars:
+            height = bar.get_height()
+            axes[0, 1].text(bar.get_x() + bar.get_width()/2., height + 0.1,
+                           f'{height:.1f}%', ha='center', va='bottom', fontweight='bold')
+        
+        # 3. Service Line Performance Matrix
+        service_perf = self.data.groupby('service_line').agg({
+            'patient_id': 'count',
+            'readmission_30_days': 'mean',
+            'total_charges': 'mean'
+        }).sort_values('patient_id', ascending=False)
+        
+        scatter = axes[0, 2].scatter(service_perf['readmission_30_days'] * 100, 
+                                   service_perf['total_charges'] / 1000,
+                                   s=service_perf['patient_id'] / 10,
+                                   c=range(len(service_perf)), cmap='viridis', alpha=0.7)
+        
+        axes[0, 2].set_title('Service Line Performance Matrix', fontweight='bold', fontsize=12)
+        axes[0, 2].set_xlabel('Readmission Rate (%)')
+        axes[0, 2].set_ylabel('Average Charges ($000s)')
+        axes[0, 2].grid(True, alpha=0.3)
+        
+        # Add service line labels
+        for i, (service, row) in enumerate(service_perf.iterrows()):
+            axes[0, 2].annotate(service[:4], 
+                              (row['readmission_30_days'] * 100, row['total_charges'] / 1000),
+                              xytext=(5, 5), textcoords='offset points', fontsize=8)
+        
+        # 4. Condition Prevalence and Impact
+        conditions = ['diabetes', 'hypertension', 'heart_disease', 'copd', 'kidney_disease']
+        condition_data = []
+        
+        for condition in conditions:
+            prevalence = self.data[condition].mean() * 100
+            readmission_rate = self.data[self.data[condition] == 1]['readmission_30_days'].mean() * 100
+            condition_data.append({'condition': condition.replace('_', ' ').title(), 
+                                 'prevalence': prevalence, 'readmission_rate': readmission_rate})
+        
+        condition_df = pd.DataFrame(condition_data)
+        
+        x = np.arange(len(condition_df))
+        width = 0.35
+        
+        bars1 = axes[1, 0].bar(x - width/2, condition_df['prevalence'], width, 
+                              label='Prevalence %', color='lightblue', alpha=0.8)
+        bars2 = axes[1, 0].bar(x + width/2, condition_df['readmission_rate'], width,
+                              label='Readmission %', color='salmon', alpha=0.8)
+        
+        axes[1, 0].set_title('Condition Prevalence vs Readmission Impact', fontweight='bold', fontsize=12)
+        axes[1, 0].set_ylabel('Percentage (%)')
+        axes[1, 0].set_xticks(x)
+        axes[1, 0].set_xticklabels(condition_df['condition'], rotation=45, ha='right')
+        axes[1, 0].legend()
+        axes[1, 0].grid(axis='y', alpha=0.3)
+        
+        # 5. Financial Analysis by Payer
+        payer_analysis = self.data.groupby('insurance_type').agg({
+            'total_charges': ['sum', 'mean'],
+            'patient_id': 'count'
+        }).round(2)
+        
+        payer_analysis.columns = ['Total_Revenue', 'Avg_Charges', 'Volume']
+        payer_analysis = payer_analysis.sort_values('Total_Revenue', ascending=True)
+        
+        bars = axes[1, 1].barh(payer_analysis.index, payer_analysis['Total_Revenue'] / 1000000,
+                              color=['#FF9999', '#66B2FF', '#99FF99', '#FFCC99', '#FF99CC'])
+        axes[1, 1].set_title('Total Revenue by Insurance Type', fontweight='bold', fontsize=12)
+        axes[1, 1].set_xlabel('Revenue ($ Millions)')
+        axes[1, 1].grid(axis='x', alpha=0.3)
+        
+        # Add value labels
+        for i, (bar, value) in enumerate(zip(bars, payer_analysis['Total_Revenue'] / 1000000)):
+            axes[1, 1].text(value + 0.5, bar.get_y() + bar.get_height()/2,
+                           f'${value:.1f}M', ha='left', va='center', fontweight='bold')
+        
+        # 6. Length of Stay Distribution by Readmission Status
+        readmit_los = self.data[self.data['readmission_30_days'] == 1]['length_of_stay']
+        no_readmit_los = self.data[self.data['readmission_30_days'] == 0]['length_of_stay']
+        
+        axes[1, 2].hist(no_readmit_los, bins=20, alpha=0.7, label='No Readmission', 
+                       color='lightblue', density=True)
+        axes[1, 2].hist(readmit_los, bins=20, alpha=0.7, label='Readmitted', 
+                       color='salmon', density=True)
+        
+        axes[1, 2].set_title('Length of Stay Distribution', fontweight='bold', fontsize=12)
+        axes[1, 2].set_xlabel('Length of Stay (days)')
+        axes[1, 2].set_ylabel('Density')
+        axes[1, 2].legend()
+        axes[1, 2].grid(axis='y', alpha=0.3)
+        
+        plt.tight_layout()
+        plt.show()
+        
+        # Print KPI Summary
+        print("=" * 60)
+        print("HEALTHSTAY ANALYTICS - KEY PERFORMANCE INDICATORS")
+        print("=" * 60)
+        for kpi, value in kpi_data.items():
+            print(f"{kpi:.<25} {value:>20}")
+        print("=" * 60)
+    
+    def create_operational_dashboard(self):
+        """Create operational-level detailed analytics"""
+        fig = plt.figure(figsize=(22, 16))
+        
+        # Create a complex subplot layout
+        gs = fig.add_gridspec(4, 4, hspace=0.3, wspace=0.3)
+        
+        # 1. Heatmap of admissions by month and service line
+        ax1 = fig.add_subplot(gs[0, :2])
+        
+        # Prepare data for heatmap
+        heatmap_data = self.data.pivot_table(
+            values='patient_id', 
+            index='service_line', 
+            columns='admission_month', 
+            aggfunc='count', 
+            fill_value=0
+        )
+        
+        sns.heatmap(heatmap_data, annot=True, fmt='d', cmap='YlOrRd', ax=ax1, 
+                   cbar_kws={'label': 'Number of Admissions'})
+        ax1.set_title('Admission Volume Heatmap by Service Line & Month', fontweight='bold', fontsize=14)
+        ax1.set_ylabel('Service Line')
+        ax1.set_xlabel('Month')
+        
+        # 2. Risk Score Distribution
+        ax2 = fig.add_subplot(gs[0, 2:])
+        
+        # Calculate risk scores
+        self.data['risk_score'] = (
+            (self.data['age'] > 75).astype(int) * 25 +
+            (self.data['condition_count'] >= 3).astype(int) * 20 +
+            (self.data['previous_admissions_12m'] > 2).astype(int) * 20 +
+            (self.data['emergency_visits_12m'] > 3).astype(int) * 15 +
+            (self.data['length_of_stay'] > 7).astype(int) * 10
+        )
+        
+        # Create risk categories
+        self.data['risk_category'] = pd.cut(self.data['risk_score'], 
+                                          bins=[0, 25, 50, 75, 100], 
+                                          labels=['Low', 'Medium', 'High', 'Critical'])
+        
+        risk_counts = self.data['risk_category'].value_counts()
+        colors = ['#90EE90', '#FFD700', '#FFA500', '#FF6347']
+        
+        wedges, texts, autotexts = ax2.pie(risk_counts.values, labels=risk_counts.index, 
+                                          autopct='%1.1f%%', colors=colors, startangle=90)
+        ax2.set_title('Patient Risk Distribution', fontweight='bold', fontsize=14)
+        
+        # Make percentage text bold
+        for autotext in autotexts:
+            autotext.set_color('white')
+            autotext.set_fontweight('bold')
+        
+        # 3. Correlation Matrix
+        ax3 = fig.add_subplot(gs[1, :2])
+        
+        correlation_vars = ['age', 'length_of_stay', 'total_charges', 'condition_count', 
+                           'previous_admissions_12m', 'patient_satisfaction', 'readmission_30_days']
+        
+        corr_matrix = self.data[correlation_vars].corr()
+        
+        mask = np.triu(np.ones_like(corr_matrix, dtype=bool))
+        sns.heatmap(corr_matrix, mask=mask, annot=True, cmap='RdBu_r', center=0,
+                   square=True, ax=ax3, cbar_kws={'shrink': .8})
+        ax3.set_title('Variable Correlation Matrix', fontweight='bold', fontsize=14)
+        
+        # 4. Readmission Rate Trends by Quarter
+        ax4 = fig.add_subplot(gs[1, 2:])
+        
+        quarterly_data = self.data.copy()
+        quarterly_data['quarter'] = pd.to_datetime(quarterly_data['admission_date']).dt.to_period('Q')
+        quarterly_trends = quarterly_data.groupby('quarter')['readmission_30_days'].mean() * 100
+        
+        ax4.plot(quarterly_trends.index.astype(str), quarterly_trends.values, 
+                marker='o', linewidth=3, markersize=8, color='red')
+        ax4.fill_between(quarterly_trends.index.astype(str), quarterly_trends.values, 
+                        alpha=0.3, color='red')
+        ax4.set_title('Quarterly Readmission Rate Trends', fontweight='bold', fontsize=14)
+        ax4.set_ylabel('Readmission Rate (%)')
+        ax4.tick_params(axis='x', rotation=45)
+        ax4.grid(True, alpha=0.3)
+        
+        # Add trend line
+        x_numeric = range(len(quarterly_trends))
+        z = np.polyfit(x_numeric, quarterly_trends.values, 1)
+        p = np.poly1d(z)
+        ax4.plot(quarterly_trends.index.astype(str), p(x_numeric), "--", 
+                color='darkred', linewidth=2, alpha=0.8, label=f'Trend: {z[0]:+.2f}% per quarter')
+        ax4.legend()
+        
+        # 5. Patient Satisfaction vs Outcomes
+        ax5 = fig.add_subplot(gs[2, :2])
+        
+        # Create satisfaction bins
+        self.data['satisfaction_bins'] = pd.cut(self.data['patient_satisfaction'], 
+                                              bins=[0, 4, 6, 8, 10], 
+                                              labels=['Poor (1-4)', 'Fair (5-6)', 'Good (7-8)', 'Excellent (9-10)'])
+        
+        satisfaction_outcomes = self.data.groupby('satisfaction_bins').agg({
+            'readmission_30_days': 'mean',
+            'length_of_stay': 'mean',
+            'patient_id': 'count'
+        }).round(3)
+        
+        x = np.arange(len(satisfaction_outcomes))
+        width = 0.35
+        
+        ax5_twin = ax5.twinx()
+        
+        bars1 = ax5.bar(x - width/2, satisfaction_outcomes['readmission_30_days'] * 100, 
+                       width, label='Readmission Rate %', color='lightcoral', alpha=0.8)
+        bars2 = ax5_twin.bar(x + width/2, satisfaction_outcomes['length_of_stay'], 
+                            width, label='Avg LOS (days)', color='lightblue', alpha=0.8)
+        
+        ax5.set_title('Patient Satisfaction vs Clinical Outcomes', fontweight='bold', fontsize=14)
+        ax5.set_ylabel('Readmission Rate (%)', color='red')
+        ax5_twin.set_ylabel('Average Length of Stay (days)', color='blue')
+        ax5.set_xticks(x)
+        ax5.set_xticklabels(satisfaction_outcomes.index, rotation=45)
+        
+        # Add legends
+        ax5.legend(loc='upper left')
+        ax5_twin.legend(loc='upper right')
+        
+        # 6. Financial Performance by Service Line
+        ax6 = fig.add_subplot(gs[2, 2:])
+        
+        financial_performance = self.data.groupby('service_line').agg({
+            'total_charges': ['mean', 'sum'],
+            'length_of_stay': 'mean',
+            'patient_id': 'count'
+        }).round(2)
+        
+        financial_performance.columns = ['Avg_Charges', 'Total_Revenue', 'Avg_LOS', 'Volume']
+        financial_performance['Revenue_per_Day'] = (financial_performance['Avg_Charges'] / 
+                                                  financial_performance['Avg_LOS']).round(2)
+        
+        # Sort by total revenue
+        financial_performance = financial_performance.sort_values('Total_Revenue', ascending=True)
+        
+        bars = ax6.barh(financial_performance.index, financial_performance['Total_Revenue'] / 1000000,
+                       color=plt.cm.viridis(np.linspace(0, 1, len(financial_performance))))
+        
+        ax6.set_title('Total Revenue by Service Line', fontweight='bold', fontsize=14)
+        ax6.set_xlabel('Total Revenue ($ Millions)')
+        ax6.grid(axis='x', alpha=0.3)
+        
+        # Add value labels
+        for bar, value in zip(bars, financial_performance['Total_Revenue'] / 1000000):
+            ax6.text(value + 0.5, bar.get_y() + bar.get_height()/2,
+                    f'${value:.1f}M', ha='left', va='center', fontweight='bold')
+        
+        # 7. Admission Type Analysis
+        ax7 = fig.add_subplot(gs[3, :2])
+        
+        admission_analysis = self.data.groupby('admission_type').agg({
+            'patient_id': 'count',
+            'readmission_30_days': 'mean',
+            'total_charges': 'mean',
+            'length_of_stay': 'mean'
+        }).round(2)
+        
+        # Create a grouped bar chart
+        x = np.arange(len(admission_analysis))
+        width = 0.2
+        
+        ax7.bar(x - width, admission_analysis['readmission_30_days'] * 100, width, 
+               label='Readmission Rate %', color='red', alpha=0.7)
+        ax7.bar(x, admission_analysis['length_of_stay'], width, 
+               label='Avg LOS (days)', color='blue', alpha=0.7)
+        ax7.bar(x + width, admission_analysis['total_charges'] / 10000, width, 
+               label='Avg Charges ($10K)', color='green', alpha=0.7)
+        
+        ax7.set_title('Performance Metrics by Admission Type', fontweight='bold', fontsize=14)
+        ax7.set_ylabel('Values')
+        ax7.set_xticks(x)
+        ax7.set_xticklabels(admission_analysis.index)
+        ax7.legend()
+        ax7.grid(axis='y', alpha=0.3)
+        
+        # 8. High-Risk Patient Profile
+        ax8 = fig.add_subplot(gs[3, 2:])
+        
+        high_risk_patients = self.data[self.data['risk_category'].isin(['High', 'Critical'])]
+        
+        # Service line distribution for high-risk patients
+        high_risk_services = high_risk_patients['service_line'].value_counts()
+        
+        colors = plt.cm.Set3(np.linspace(0, 1, len(high_risk_services)))
+        bars = ax8.bar(range(len(high_risk_services)), high_risk_services.values, color=colors)
+        
+        ax8.set_title('High-Risk Patients by Service Line', fontweight='bold', fontsize=14)
+        ax8.set_ylabel('Number of High-Risk Patients')
+        ax8.set_xticks(range(len(high_risk_services)))
+        ax8.set_xticklabels(high_risk_services.index, rotation=45, ha='right')
+        ax8.grid(axis='y', alpha=0.3)
+        
+        # Add value labels on bars
+        for bar, value in zip(bars, high_risk_services.values):
+            ax8.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 5,
+                    str(value), ha='center', va='bottom', fontweight='bold')
+        
+        plt.suptitle('HealthStay Analytics - Operational Intelligence Dashboard', 
+                    fontsize=20, fontweight='bold', y=0.98)
+        
+        plt.tight_layout()
+        plt.show()
+    
+    def create_predictive_analytics_dashboard(self):
+        """Create predictive analytics and forecasting dashboard"""
+        fig, axes = plt.subplots(2, 2, figsize=(18, 12))
+        fig.suptitle('HealthStay Analytics - Predictive Analytics Dashboard', 
+                    fontsize=18, fontweight='bold')
+        
+        # 1. Readmission Risk Prediction Model Visualization
+        ax1 = axes[0, 0]
+
+ class ReadmissionRiskAnalyzer:
+    def __init__(self, data):
+        self.data = data.copy()
+    
+    def create_risk_score_analysis(self):
+        """Complete risk score analysis with visualization and performance metrics"""
+        
+        # Create risk score vs actual readmission
+        if 'risk_score' not in self.data.columns:
+            self.data['risk_score'] = (
+                (self.data['age'] > 75).astype(int) * 25 +
+                (self.data['condition_count'] >= 3).astype(int) * 20 +
+                (self.data['previous_admissions_12m'] > 2).astype(int) * 20 +
+                (self.data['emergency_visits_12m'] > 3).astype(int) * 15 +
+                (self.data['length_of_stay'] > 7).astype(int) * 10
+            )
+        
+        # Create risk score deciles for analysis
+        risk_bins = pd.cut(self.data['risk_score'], bins=10, labels=False)
+        self.data['risk_decile'] = risk_bins + 1  # Make it 1-10 instead of 0-9
+        
+        # Group by risk deciles and calculate actual readmission rates
+        risk_analysis = self.data.groupby('risk_decile').agg({
+            'readmission_30_days': ['mean', 'count']
+        }).round(3)
+        risk_analysis.columns = ['Actual_Rate', 'Count']
+        
+        # Create predicted rates that should ideally align with actual rates
+        # For demonstration - in practice, you'd use your trained model's predictions
+        predicted_rates = np.linspace(0.05, 0.35, len(risk_analysis))
+        
+        # Create the visualization
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+        
+        # Bar chart comparing actual vs predicted rates
+        x_pos = range(len(risk_analysis))
+        width = 0.35
+        
+        bars1 = ax1.bar([x - width/2 for x in x_pos], risk_analysis['Actual_Rate'] * 100, 
+                       width, label='Actual Readmission %', color='red', alpha=0.7)
+        bars2 = ax1.bar([x + width/2 for x in x_pos], predicted_rates * 100, 
+                       width, label='Predicted Risk %', color='blue', alpha=0.7)
+        
+        ax1.set_title('Risk Prediction Model Performance', fontweight='bold')
+        ax1.set_ylabel('Readmission Rate (%)')
+        ax1.set_xlabel('Risk Score Deciles')
+        ax1.set_xticks(x_pos)
+        ax1.set_xticklabels([f'D{i+1}' for i in range(len(risk_analysis))])
+        ax1.legend()
+        ax1.grid(axis='y', alpha=0.3)
+        
+        # Add value labels on bars
+        for bar in bars1:
+            height = bar.get_height()
+            ax1.text(bar.get_x() + bar.get_width()/2., height + 0.5, 
+                    f'{height:.1f}%', ha='center', va='bottom', fontsize=8)
+        
+        for bar in bars2:
+            height = bar.get_height()
+            ax1.text(bar.get_x() + bar.get_width()/2., height + 0.5, 
+                    f'{height:.1f}%', ha='center', va='bottom', fontsize=8)
+        
+        # Calibration plot (scatter plot showing ideal vs actual)
+        ax2.scatter(predicted_rates * 100, risk_analysis['Actual_Rate'] * 100, 
+                   s=risk_analysis['Count']*2, alpha=0.6, color='purple')
+        ax2.plot([0, 40], [0, 40], 'k--', alpha=0.5, label='Perfect Calibration')
+        ax2.set_xlabel('Predicted Risk (%)')
+        ax2.set_ylabel('Actual Readmission Rate (%)')
+        ax2.set_title('Model Calibration Plot', fontweight='bold')
+        ax2.legend()
+        ax2.grid(alpha=0.3)
+        
+        # Add R² and other metrics
+        correlation, p_value = pearsonr(predicted_rates, risk_analysis['Actual_Rate'])
+        ax2.text(0.05, 0.95, f'Correlation: {correlation:.3f}\np-value: {p_value:.3f}', 
+                transform=ax2.transAxes, verticalalignment='top', 
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+        
+        plt.tight_layout()
+        plt.show()
+        
+        # Print summary statistics
+        print("Risk Score Distribution:")
+        print(f"Mean Risk Score: {self.data['risk_score'].mean():.2f}")
+        print(f"Std Risk Score: {self.data['risk_score'].std():.2f}")
+        print(f"Min Risk Score: {self.data['risk_score'].min()}")
+        print(f"Max Risk Score: {self.data['risk_score'].max()}")
+        
+        print("\nModel Performance by Decile:")
+        risk_summary = risk_analysis.copy()
+        risk_summary['Predicted_Rate'] = predicted_rates
+        risk_summary['Difference'] = risk_summary['Actual_Rate'] - risk_summary['Predicted_Rate']
+        print(risk_summary)
+        
+        # Calculate overall model performance metrics
+        mae = np.mean(np.abs(risk_summary['Difference']))
+        rmse = np.sqrt(np.mean(risk_summary['Difference']**2))
+        
+        print(f"\nOverall Model Performance:")
+        print(f"Mean Absolute Error: {mae:.4f}")
+        print(f"Root Mean Square Error: {rmse:.4f}")
+        print(f"Correlation: {correlation:.4f}")
+        
+        # Additional comprehensive analysis
+        self._additional_performance_metrics(risk_summary, correlation)
+        self._risk_factor_analysis()
+        self._create_additional_visualizations()
+        
+        return risk_summary, correlation
+    
+    def _additional_performance_metrics(self, risk_summary, correlation):
+        """Calculate additional performance metrics"""
+        print("\n" + "="*50)
+        print("COMPREHENSIVE MODEL EVALUATION")
+        print("="*50)
+        
+        # Model discrimination metrics
+        if 'readmission_30_days' in self.data.columns:
+            # Convert risk scores to probabilities for AUC calculation
+            risk_probs = self.data['risk_score'] / 100  # Normalize to 0-1
+            auc_score = roc_auc_score(self.data['readmission_30_days'], risk_probs)
+            print(f"AUC-ROC Score: {auc_score:.4f}")
+        
+        # Calibration metrics
+        hosmer_lemeshow = self._hosmer_lemeshow_test(risk_summary)
+        print(f"Hosmer-Lemeshow p-value: {hosmer_lemeshow:.4f}")
+        
+        # Classification performance at different thresholds
+        print("\nClassification Performance at Risk Score Thresholds:")
+        thresholds = [50, 60, 70, 80]
+        for threshold in thresholds:
+            high_risk = (self.data['risk_score'] >= threshold).astype(int)
+            if high_risk.sum() > 0:  # Avoid division by zero
+                precision = (high_risk * self.data['readmission_30_days']).sum() / high_risk.sum()
+                recall = (high_risk * self.data['readmission_30_days']).sum() / self.data['readmission_30_days'].sum()
+                f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+                print(f"Threshold {threshold}: Precision={precision:.3f}, Recall={recall:.3f}, F1={f1:.3f}")
+    
+    def _hosmer_lemeshow_test(self, risk_summary):
+        """Simplified Hosmer-Lemeshow test approximation"""
+        observed = risk_summary['Actual_Rate'] * risk_summary['Count']
+        expected = risk_summary['Predicted_Rate'] * risk_summary['Count']
+        chi_sq = np.sum((observed - expected)**2 / expected)
+        # Approximate p-value (simplified)
+        from scipy.stats import chi2
+        p_value = 1 - chi2.cdf(chi_sq, df=len(risk_summary)-2)
+        return p_value
+    
+    def _risk_factor_analysis(self):
+        """Analyze individual risk factors"""
+        print("\n" + "="*30)
+        print("RISK FACTOR ANALYSIS")
+        print("="*30)
+        
+        risk_factors = {
+            'Age > 75': (self.data['age'] > 75),
+            'Conditions ≥ 3': (self.data['condition_count'] >= 3),
+            'Prev Admissions > 2': (self.data['previous_admissions_12m'] > 2),
+            'Emergency Visits > 3': (self.data['emergency_visits_12m'] > 3),
+            'Length of Stay > 7': (self.data['length_of_stay'] > 7)
+        }
+        
+        for factor_name, factor_condition in risk_factors.items():
+            if factor_condition.sum() > 0:
+                readmission_rate = self.data[factor_condition]['readmission_30_days'].mean()
+                prevalence = factor_condition.mean()
+                print(f"{factor_name}:")
+                print(f"  Prevalence: {prevalence:.1%}")
+                print(f"  Readmission Rate: {readmission_rate:.1%}")
+                print(f"  Count: {factor_condition.sum()}")
+    
+    def _create_additional_visualizations(self):
+        """Create additional visualizations"""
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 12))
+        
+        # Risk score distribution
+        ax1.hist(self.data['risk_score'], bins=20, alpha=0.7, color='skyblue', edgecolor='black')
+        ax1.set_title('Distribution of Risk Scores', fontweight='bold')
+        ax1.set_xlabel('Risk Score')
+        ax1.set_ylabel('Frequency')
+        ax1.grid(axis='y', alpha=0.3)
+        
+        # Risk score vs actual readmission (scatter)
+        readmitted = self.data[self.data['readmission_30_days'] == 1]
+        not_readmitted = self.data[self.data['readmission_30_days'] == 0]
+        
+        ax2.scatter(not_readmitted['risk_score'], 
+                   np.random.normal(0, 0.1, len(not_readmitted)), 
+                   alpha=0.5, label='No Readmission', color='green', s=20)
+        ax2.scatter(readmitted['risk_score'], 
+                   np.random.normal(1, 0.1, len(readmitted)), 
+                   alpha=0.5, label='Readmitted', color='red', s=20)
+        ax2.set_title('Risk Score vs Readmission Outcome', fontweight='bold')
+        ax2.set_xlabel('Risk Score')
+        ax2.set_ylabel('Readmission (with jitter)')
+        ax2.set_yticks([0, 1])
+        ax2.set_yticklabels(['No', 'Yes'])
+        ax2.legend()
+        ax2.grid(alpha=0.3)
+        
+        # Risk factors contribution heatmap
+        risk_components = pd.DataFrame({
+            'Age > 75': (self.data['age'] > 75).astype(int) * 25,
+            'Conditions ≥ 3': (self.data['condition_count'] >= 3).astype(int) * 20,
+            'Prev Admits > 2': (self.data['previous_admissions_12m'] > 2).astype(int) * 20,
+            'ER Visits > 3': (self.data['emergency_visits_12m'] > 3).astype(int) * 15,
+            'LOS > 7': (self.data['length_of_stay'] > 7).astype(int) * 10
+        })
+        
+        correlation_matrix = risk_components.corr()
+        sns.heatmap(correlation_matrix, annot=True, cmap='coolwarm', center=0, ax=ax3)
+        ax3.set_title('Risk Factor Correlation Matrix', fontweight='bold')
+        
+        # Model performance across risk score ranges
+        risk_ranges = pd.cut(self.data['risk_score'], bins=5, precision=0)
+        range_performance = self.data.groupby(risk_ranges)['readmission_30_days'].agg(['mean', 'count'])
+        
+        bars = ax4.bar(range(len(range_performance)), range_performance['mean'] * 100, 
+                      alpha=0.7, color='orange')
+        ax4.set_title('Readmission Rate by Risk Score Range', fontweight='bold')
+        ax4.set_xlabel('Risk Score Range')
+        ax4.set_ylabel('Readmission Rate (%)')
+        ax4.set_xticks(range(len(range_performance)))
+        ax4.set_xticklabels([f"{interval.left:.0f}-{interval.right:.0f}" 
+                            for interval in range_performance.index], rotation=45)
+        
+        # Add count labels on bars
+        for i, bar in enumerate(bars):
+            height = bar.get_height()
+            count = range_performance.iloc[i]['count']
+            ax4.text(bar.get_x() + bar.get_width()/2., height + 0.5, 
+                    f'{height:.1f}%\n(n={count})', ha='center', va='bottom', fontsize=8)
+        
+        ax4.grid(axis='y', alpha=0.3)
+        
+        plt.tight_layout()
+        plt.show()
+        
+        # Summary insights
+        print("\n" + "="*30)
+        print("KEY INSIGHTS")
+        print("="*30)
+        print("1. Risk Model Performance:")
+        print(f"   - Correlation between predicted and actual: {correlation:.3f}")
+        print(f"   - Risk scores range from {self.data['risk_score'].min()} to {self.data['risk_score'].max()}")
+        
+        high_risk_patients = (self.data['risk_score'] >= 70).sum()
+        high_risk_readmissions = self.data[self.data['risk_score'] >= 70]['readmission_30_days'].sum()
+        
+        print(f"\n2. High-Risk Patient Identification (Score ≥ 70):")
+        print(f"   - {high_risk_patients} patients identified as high-risk")
+        print(f"   - {high_risk_readmissions} actual readmissions in this group")
+        if high_risk_patients > 0:
+            print(f"   - {(high_risk_readmissions/high_risk_patients)*100:.1f}% readmission rate in high-risk group")
+
+# Example usage:
+# analyzer = ReadmissionRiskAnalyzer(your_dataframe)
+# results, correlation = analyzer.create_risk_score_analysis()
