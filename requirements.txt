@@ -1,0 +1,20 @@
+# Core Data Analysis
+pandas==2.2.1
+numpy==1.26.4
+
+# Visualization
+matplotlib==3.8.4
+seaborn==0.13.2
+
+# Machine Learning (basic use or collaboration with data scientists)
+scikit-learn==1.5.0
+
+# Notebook Environment
+jupyterlab==4.2.1
+notebook==7.1.3
+
+# Optional: Progress bar, useful in loops
+tqdm==4.66.4
+
+# Optional: Excel reading/writing
+openpyxl==3.1.2
