@@ -62,19 +62,6 @@ As a Data Analyst, I led the end-to-end analytics pipeline, collaborating with c
 
 ---
 
-## 🏁 Quickstart
-
-> This is a **private project**. Data, sample files, and sensitive implementation details are strictly confidential and not shared in this repository.  
-
-## 🤝 Contributing
-
-We welcome contributions! Please:
-- Open issues for bugs/feature requests.
-- Submit pull requests for improvements.
-- Follow the project’s code style and documentation standards.
-
----
-
 ## 📜 License
 
 Distributed under the MIT License. See [LICENSE](LICENSE) for details.
