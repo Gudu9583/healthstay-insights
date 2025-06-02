@@ -1,0 +1,438 @@
+# HealthStay Insights - Predictive Analytics for Patient Readmission Risk
+# Healthcare Data Analysis Project - Complete Enhanced Version
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import train_test_split, cross_val_score, GridSearchCV, StratifiedKFold
+from sklearn.preprocessing import StandardScaler, LabelEncoder, RobustScaler
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, ExtraTreesClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import SVC
+from sklearn.naive_bayes import GaussianNB
+from sklearn.metrics import (classification_report, confusion_matrix, roc_auc_score, 
+                           roc_curve, precision_recall_curve, f1_score, precision_score, 
+                           recall_score, accuracy_score)
+from sklearn.impute import SimpleImputer, KNNImputer
+from sklearn.feature_selection import SelectKBest, f_classif, RFE
+from sklearn.calibration import CalibratedClassifierCV
+import warnings
+warnings.filterwarnings('ignore')
+
+# Additional imports for enhanced functionality
+from datetime import datetime, timedelta
+import joblib
+import json
+from collections import defaultdict
+
+class HealthStayPredictor:
+    """
+    A comprehensive predictive analytics system for patient readmission risk assessment.
+    Designed for healthcare institutions to identify high-risk patients and improve care quality.
+    
+    Features:
+    - Multiple ML algorithms with hyperparameter tuning
+    - Feature engineering and selection
+    - Model calibration and ensemble methods
+    - Risk stratification and clinical decision support
+    - Model persistence and deployment capabilities
+    """
+    
+    def __init__(self, random_state=42):
+        self.models = {}
+        self.ensemble_model = None
+        self.scaler = RobustScaler()  # More robust to outliers
+        self.label_encoders = {}
+        self.feature_importance = None
+        self.feature_selector = None
+        self.selected_features = None
+        self.model_metrics = {}
+        self.random_state = random_state
+        self.calibrated_models = {}
+        
+    def generate_sample_data(self, n_samples=5000):
+        """Generate realistic healthcare sample data for demonstration"""
+        np.random.seed(self.random_state)
+        
+        # Patient demographics with more realistic distributions
+        ages = np.random.gamma(2, 35).clip(18, 95)  # More realistic age distribution
+        genders = np.random.choice(['Male', 'Female'], n_samples, p=[0.48, 0.52])
+        
+        # Clinical indicators with interdependencies
+        diabetes = np.random.choice([0, 1], n_samples, p=[0.7, 0.3])
+        hypertension_prob = 0.4 + (ages > 65) * 0.2 + diabetes * 0.15
+        hypertension = np.random.binomial(1, hypertension_prob.clip(0, 1))
+        
+        heart_disease_prob = 0.25 + (ages > 70) * 0.15 + diabetes * 0.1 + hypertension * 0.1
+        heart_disease = np.random.binomial(1, heart_disease_prob.clip(0, 1))
+        
+        # Additional comorbidities
+        kidney_disease = np.random.choice([0, 1], n_samples, p=[0.85, 0.15])
+        copd = np.random.choice([0, 1], n_samples, p=[0.88, 0.12])
+        mental_health = np.random.choice([0, 1], n_samples, p=[0.75, 0.25])
+        
+        # Socioeconomic factors
+        marital_status = np.random.choice(['Single', 'Married', 'Divorced', 'Widowed'], 
+                                        n_samples, p=[0.3, 0.4, 0.15, 0.15])
+        
+        # Length of stay with more realistic distribution
+        base_los = np.random.lognormal(1.2, 0.8, n_samples)
+        los_modifier = ((ages > 70) * 2 + diabetes * 1.5 + hypertension * 1.2 + 
+                       heart_disease * 2 + kidney_disease * 1.8 + copd * 2.2)
+        length_of_stay = (base_los + los_modifier).clip(1, 30)
+        
+        # Number of diagnoses and procedures
+        base_diagnoses = np.random.poisson(2.5, n_samples)
+        diagnoses_modifier = diabetes + hypertension + heart_disease + kidney_disease + copd
+        num_diagnoses = (base_diagnoses + diagnoses_modifier).clip(1, 15)
+        
+        num_procedures = np.random.poisson(1.8, n_samples) + (heart_disease * 2) + (kidney_disease * 1)
+        
+        # Medication counts
+        base_medications = np.random.poisson(4, n_samples)
+        med_modifier = diabetes * 3 + hypertension * 2 + heart_disease * 2 + kidney_disease * 2
+        num_medications = (base_medications + med_modifier).clip(0, 25)
+        
+        # Admission and discharge information
+        admission_types = np.random.choice(['Emergency', 'Elective', 'Urgent'], 
+                                         n_samples, p=[0.5, 0.3, 0.2])
+        
+        discharge_disposition = np.random.choice([
+            'Home', 'SNF', 'Home_Health', 'Rehab', 'AMA', 'Transfer'
+        ], n_samples, p=[0.55, 0.15, 0.15, 0.08, 0.02, 0.05])
+        
+        # Insurance type
+        insurance = np.random.choice(['Medicare', 'Medicaid', 'Commercial', 'Self_Pay'], 
+                                   n_samples, p=[0.45, 0.25, 0.25, 0.05])
+        
+        # ED visits in past year
+        prior_ed_visits = np.random.poisson(1.2, n_samples).clip(0, 10)
+        
+        # BMI
+        bmi = np.random.normal(28, 6, n_samples).clip(15, 50)
+        
+        # Calculate readmission probability with more sophisticated risk model
+        risk_score = (
+            (ages > 75) * 0.25 +
+            (ages > 85) * 0.15 +
+            diabetes * 0.2 +
+            heart_disease * 0.3 +
+            kidney_disease * 0.25 +
+            copd * 0.35 +
+            hypertension * 0.12 +
+            mental_health * 0.18 +
+            (length_of_stay > 7) * 0.15 +
+            (length_of_stay > 14) * 0.1 +
+            (num_diagnoses > 5) * 0.12 +
+            (num_medications > 10) * 0.08 +
+            (discharge_disposition == 'AMA') * 0.45 +
+            (discharge_disposition == 'SNF') * 0.15 +
+            (admission_types == 'Emergency') * 0.1 +
+            (prior_ed_visits > 2) * 0.2 +
+            (bmi < 18.5) * 0.15 +
+            (bmi > 35) * 0.1 +
+            (marital_status == 'Single') * 0.05
+        )
+        
+        # Add interaction effects and noise
+        interaction_effects = (
+            (diabetes * heart_disease) * 0.15 +
+            (copd * heart_disease) * 0.2 +
+            (kidney_disease * diabetes) * 0.18
+        )
+        
+        total_risk = risk_score + interaction_effects
+        readmission_prob = 1 / (1 + np.exp(-(total_risk - 0.6 + np.random.normal(0, 0.25, n_samples))))
+        readmission_30_days = (np.random.random(n_samples) < readmission_prob).astype(int)
+        
+        # Create DataFrame
+        data = pd.DataFrame({
+            'patient_id': range(1, n_samples + 1),
+            'age': ages.round().astype(int),
+            'gender': genders,
+            'marital_status': marital_status,
+            'bmi': bmi.round(1),
+            'diabetes': diabetes,
+            'hypertension': hypertension,
+            'heart_disease': heart_disease,
+            'kidney_disease': kidney_disease,
+            'copd': copd,
+            'mental_health': mental_health,
+            'length_of_stay': length_of_stay.round().astype(int),
+            'num_diagnoses': num_diagnoses,
+            'num_procedures': num_procedures,
+            'num_medications': num_medications,
+            'prior_ed_visits': prior_ed_visits,
+            'admission_type': admission_types,
+            'discharge_disposition': discharge_disposition,
+            'insurance_type': insurance,
+            'readmission_30_days': readmission_30_days
+        })
+        
+        # Add realistic missing values
+        missing_columns = ['bmi', 'num_diagnoses', 'num_procedures', 'prior_ed_visits']
+        for col in missing_columns:
+            missing_mask = np.random.random(n_samples) < 0.03
+            data.loc[missing_mask, col] = np.nan
+            
+        return data
+    
+    def preprocess_data(self, df, fit_encoders=True):
+        """Comprehensive data preprocessing for healthcare data"""
+        print("Starting enhanced data preprocessing...")
+        
+        df_processed = df.copy()
+        
+        # Handle missing values with more sophisticated imputation
+        numeric_columns = df_processed.select_dtypes(include=[np.number]).columns
+        categorical_columns = df_processed.select_dtypes(include=['object']).columns.tolist()
+        
+        # Remove ID and target from categorical if present
+        categorical_columns = [col for col in categorical_columns if col not in ['patient_id']]
+        
+        # KNN imputation for numeric data (better than median for healthcare data)
+        if len(numeric_columns) > 1:
+            knn_imputer = KNNImputer(n_neighbors=5)
+            df_processed[numeric_columns] = knn_imputer.fit_transform(df_processed[numeric_columns])
+        
+        # Mode imputation for categorical
+        if categorical_columns:
+            categorical_imputer = SimpleImputer(strategy='most_frequent')
+            df_processed[categorical_columns] = categorical_imputer.fit_transform(df_processed[categorical_columns])
+        
+        # Encode categorical variables
+        for col in categorical_columns:
+            if fit_encoders:
+                le = LabelEncoder()
+                df_processed[col] = le.fit_transform(df_processed[col])
+                self.label_encoders[col] = le
+            else:
+                if col in self.label_encoders:
+                    # Handle unseen categories
+                    le = self.label_encoders[col]
+                    unique_values = set(df_processed[col].unique())
+                    known_values = set(le.classes_)
+                    unseen_values = unique_values - known_values
+                    
+                    if unseen_values:
+                        # Map unseen values to the most frequent class
+                        most_frequent = le.transform([le.classes_[0]])[0]
+                        df_processed[col] = df_processed[col].replace(list(unseen_values), le.classes_[0])
+                    
+                    df_processed[col] = le.transform(df_processed[col])
+        
+        # Advanced feature engineering
+        self._create_advanced_features(df_processed)
+        
+        print("Enhanced data preprocessing completed!")
+        return df_processed
+    
+    def _create_advanced_features(self, df):
+        """Create advanced engineered features"""
+        # Age-based features
+        df['age_group'] = pd.cut(df['age'], bins=[0, 40, 55, 70, 85, 100], 
+                               labels=[0, 1, 2, 3, 4]).astype(int)
+        df['elderly'] = (df['age'] > 75).astype(int)
+        df['very_elderly'] = (df['age'] > 85).astype(int)
+        
+        # BMI categories
+        if 'bmi' in df.columns:
+            df['underweight'] = (df['bmi'] < 18.5).astype(int)
+            df['overweight'] = (df['bmi'] > 25).astype(int)
+            df['obese'] = (df['bmi'] > 30).astype(int)
+        
+        # Comorbidity scores
+        comorbidity_cols = ['diabetes', 'hypertension', 'heart_disease', 'kidney_disease', 'copd', 'mental_health']
+        available_comorbidity_cols = [col for col in comorbidity_cols if col in df.columns]
+        df['comorbidity_count'] = df[available_comorbidity_cols].sum(axis=1)
+        df['multiple_comorbidities'] = (df['comorbidity_count'] > 2).astype(int)
+        
+        # Interaction features
+        if all(col in df.columns for col in ['diabetes', 'heart_disease']):
+            df['diabetes_heart'] = df['diabetes'] * df['heart_disease']
+        if all(col in df.columns for col in ['copd', 'heart_disease']):
+            df['copd_heart'] = df['copd'] * df['heart_disease']
+        if all(col in df.columns for col in ['kidney_disease', 'diabetes']):
+            df['kidney_diabetes'] = df['kidney_disease'] * df['diabetes']
+        
+        # Length of stay categories
+        df['short_stay'] = (df['length_of_stay'] <= 2).astype(int)
+        df['long_stay'] = (df['length_of_stay'] > 7).astype(int)
+        df['very_long_stay'] = (df['length_of_stay'] > 14).astype(int)
+        
+        # Medication burden
+        df['polypharmacy'] = (df['num_medications'] > 5).astype(int)
+        df['high_medication_burden'] = (df['num_medications'] > 10).astype(int)
+        
+        # Healthcare utilization
+        if 'prior_ed_visits' in df.columns:
+            df['frequent_ed_user'] = (df['prior_ed_visits'] > 3).astype(int)
+            df['has_prior_ed'] = (df['prior_ed_visits'] > 0).astype(int)
+        
+        # Risk stratification features
+        df['high_risk_discharge'] = ((df['discharge_disposition'] == 3) |  # AMA
+                                   (df['discharge_disposition'] == 1)).astype(int)  # SNF
+        
+        # Complex patient indicator
+        complexity_score = (df['comorbidity_count'] + 
+                          (df['num_diagnoses'] > 5).astype(int) + 
+                          (df['num_procedures'] > 3).astype(int))
+        df['complex_patient'] = (complexity_score > 3).astype(int)
+    
+    def exploratory_analysis(self, df):
+        """Perform comprehensive EDA with enhanced visualizations"""
+        print("\n=== ENHANCED EXPLORATORY DATA ANALYSIS ===")
+        
+        # Basic statistics
+        print(f"Dataset shape: {df.shape}")
+        print(f"Readmission rate: {df['readmission_30_days'].mean():.2%}")
+        print(f"Missing values per column:")
+        print(df.isnull().sum().sort_values(ascending=False))
+        
+        # Create comprehensive visualization
+        plt.figure(figsize=(20, 16))
+        
+        # 1. Age distribution by readmission status
+        plt.subplot(3, 4, 1)
+        plt.hist(df[df['readmission_30_days']==0]['age'], alpha=0.7, label='No Readmission', bins=30, density=True)
+        plt.hist(df[df['readmission_30_days']==1]['age'], alpha=0.7, label='Readmission', bins=30, density=True)
+        plt.title('Age Distribution by Readmission Status')
+        plt.xlabel('Age')
+        plt.ylabel('Density')
+        plt.legend()
+        
+        # 2. Readmission rate by age groups
+        plt.subplot(3, 4, 2)
+        age_bins = pd.cut(df['age'], bins=[0, 50, 65, 75, 85, 100], labels=['<50', '50-65', '65-75', '75-85', '85+'])
+        readmission_by_age = df.groupby(age_bins)['readmission_30_days'].agg(['mean', 'count'])
+        readmission_by_age['mean'].plot(kind='bar', color='skyblue')
+        plt.title('Readmission Rate by Age Group')
+        plt.ylabel('Readmission Rate')
+        plt.xticks(rotation=45)
+        
+        # 3. Comorbidity analysis
+        plt.subplot(3, 4, 3)
+        comorbidities = ['diabetes', 'hypertension', 'heart_disease']
+        if 'kidney_disease' in df.columns:
+            comorbidities.extend(['kidney_disease', 'copd'])
+        available_comorbidities = [col for col in comorbidities if col in df.columns]
+        
+        comorbidity_rates = []
+        for cond in available_comorbidities:
+            rate = df[df[cond] == 1]['readmission_30_days'].mean()
+            comorbidity_rates.append(rate)
+        
+        bars = plt.bar(available_comorbidities, comorbidity_rates, 
+                      color=['red', 'orange', 'purple', 'green', 'brown'][:len(available_comorbidities)])
+        plt.title('Readmission Rate by Comorbidity')
+        plt.ylabel('Readmission Rate')
+        plt.xticks(rotation=45)
+        
+        # Add value labels on bars
+        for bar, rate in zip(bars, comorbidity_rates):
+            plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01, 
+                    f'{rate:.2%}', ha='center', va='bottom')
+        
+        # 4. Length of stay analysis
+        plt.subplot(3, 4, 4)
+        los_readmit = df[df['readmission_30_days']==1]['length_of_stay']
+        los_no_readmit = df[df['readmission_30_days']==0]['length_of_stay']
+        
+        plt.boxplot([los_no_readmit, los_readmit], labels=['No Readmission', 'Readmission'])
+        plt.title('Length of Stay Distribution')
+        plt.ylabel('Days')
+        
+        # 5. Correlation heatmap
+        plt.subplot(3, 4, 5)
+        numeric_cols = df.select_dtypes(include=[np.number]).columns
+        # Select most relevant columns for correlation
+        relevant_cols = [col for col in numeric_cols if col not in ['patient_id']][:12]
+        corr_matrix = df[relevant_cols].corr()
+        mask = np.triu(np.ones_like(corr_matrix, dtype=bool))
+        sns.heatmap(corr_matrix, mask=mask, annot=True, cmap='coolwarm', center=0, fmt='.2f', square=True)
+        plt.title('Feature Correlation Matrix')
+        
+        # 6. Admission type analysis
+        plt.subplot(3, 4, 6)
+        admission_stats = df.groupby('admission_type')['readmission_30_days'].agg(['mean', 'count'])
+        admission_stats['mean'].plot(kind='bar', color='lightgreen')
+        plt.title('Readmission Rate by Admission Type')
+        plt.ylabel('Readmission Rate')
+        plt.xticks(rotation=45)
+        
+        # 7. Discharge disposition impact
+        plt.subplot(3, 4, 7)
+        discharge_stats = df.groupby('discharge_disposition')['readmission_30_days'].agg(['mean', 'count'])
+        discharge_stats['mean'].plot(kind='bar', color='salmon')
+        plt.title('Readmission Rate by Discharge Disposition')
+        plt.ylabel('Readmission Rate')
+        plt.xticks(rotation=45)
+        
+        # 8. Comorbidity count analysis
+        plt.subplot(3, 4, 8)
+        if 'comorbidity_count' in df.columns:
+            comorbidity_readmit = df.groupby('comorbidity_count')['readmission_30_days'].mean()
+            comorbidity_readmit.plot(kind='bar', color='gold')
+            plt.title('Readmission Rate by Comorbidity Count')
+            plt.xlabel('Number of Comorbidities')
+            plt.ylabel('Readmission Rate')
+        
+        # 9. Medication burden
+        plt.subplot(3, 4, 9)
+        med_groups = pd.cut(df['num_medications'], bins=[0, 3, 7, 12, 25], labels=['Low', 'Medium', 'High', 'Very High'])
+        med_readmission = df.groupby(med_groups)['readmission_30_days'].mean()
+        med_readmission.plot(kind='bar', color='mediumpurple')
+        plt.title('Readmission Rate by Medication Burden')
+        plt.ylabel('Readmission Rate')
+        plt.xticks(rotation=45)
+        
+        # 10. Prior ED visits impact
+        plt.subplot(3, 4, 10)
+        if 'prior_ed_visits' in df.columns:
+            ed_groups = pd.cut(df['prior_ed_visits'], bins=[-1, 0, 2, 5, 15], labels=['None', 'Low', 'Medium', 'High'])
+            ed_readmission = df.groupby(ed_groups)['readmission_30_days'].mean()
+            ed_readmission.plot(kind='bar', color='lightcoral')
+            plt.title('Readmission Rate by Prior ED Visits')
+            plt.ylabel('Readmission Rate')
+            plt.xticks(rotation=45)
+        
+        # 11. BMI analysis
+        plt.subplot(3, 4, 11)
+        if 'bmi' in df.columns and not df['bmi'].isna().all():
+            bmi_groups = pd.cut(df['bmi'], bins=[0, 18.5, 25, 30, 35, 50], 
+                              labels=['Underweight', 'Normal', 'Overweight', 'Obese', 'Severely Obese'])
+            bmi_readmission = df.groupby(bmi_groups)['readmission_30_days'].mean()
+            bmi_readmission.plot(kind='bar', color='lightseagreen')
+            plt.title('Readmission Rate by BMI Category')
+            plt.ylabel('Readmission Rate')
+            plt.xticks(rotation=45)
+        
+        # 12. Feature importance preview (if available)
+        plt.subplot(3, 4, 12)
+        # This will be filled after model training
+        plt.text(0.5, 0.5, 'Feature Importance\n(Available after model training)', 
+                ha='center', va='center', transform=plt.gca().transAxes, fontsize=12)
+        plt.title('Top Feature Importance')
+        
+        plt.tight_layout()
+        plt.show()
+        
+        # Statistical summary
+        print("\n=== STATISTICAL INSIGHTS ===")
+        overall_readmission_rate = df['readmission_30_days'].mean()
+        
+        # Age analysis
+        elderly_readmission = df[df['age'] > 75]['readmission_30_days'].mean()
+        print(f"Overall readmission rate: {overall_readmission_rate:.2%}")
+        print(f"Readmission rate for patients >75 years: {elderly_readmission:.2%}")
+        
+        # High-risk factors analysis
+        if 'comorbidity_count' in df.columns:
+            high_comorbidity_rate = df[df['comorbidity_count'] > 2]['readmission_30_days'].mean()
+            print(f"Readmission rate for patients with >2 comorbidities: {high_comorbidity_rate:.2%}")
+        
+        long_stay_rate = df[df['length_of_stay'] > 7]['readmission_30_days'].mean()
+        print(f"Readmission rate for patients with LOS >7 days: {long_stay_rate:.2%}")
+        
+        return df
