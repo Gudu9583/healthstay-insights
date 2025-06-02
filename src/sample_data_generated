@@ -1,0 +1,269 @@
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+from faker import Faker
+import random
+
+# Set random seeds for reproducibility
+np.random.seed(42)
+random.seed(42)
+fake = Faker()
+Faker.seed(42)
+
+class HealthcareDataGenerator:
+    """Generate synthetic healthcare data for readmission prediction"""
+    
+    def __init__(self, n_patients=10000):
+        self.n_patients = n_patients
+        self.icd10_codes = self._get_common_icd10_codes()
+        self.medications = self._get_common_medications()
+        
+    def _get_common_icd10_codes(self):
+        """Common ICD-10 codes for readmission analysis"""
+        return {
+            'I50.9': 'Heart failure, unspecified',
+            'N18.9': 'Chronic kidney disease, unspecified',
+            'E11.9': 'Type 2 diabetes mellitus without complications',
+            'I10': 'Essential hypertension',
+            'J44.1': 'Chronic obstructive pulmonary disease with acute exacerbation',
+            'I25.10': 'Atherosclerotic heart disease of native coronary artery',
+            'Z51.11': 'Encounter for antineoplastic chemotherapy',
+            'G93.1': 'Anoxic brain damage, not elsewhere classified',
+            'I46.9': 'Cardiac arrest, cause unspecified',
+            'R06.02': 'Shortness of breath'
+        }
+    
+    def _get_common_medications(self):
+        """Common medications in hospital settings"""
+        return [
+            'Lisinopril', 'Metformin', 'Warfarin', 'Furosemide', 'Insulin',
+            'Atorvastatin', 'Metoprolol', 'Amlodipine', 'Omeprazole', 'Aspirin',
+            'Gabapentin', 'Prednisone', 'Levothyroxine', 'Albuterol', 'Morphine'
+        ]
+    
+    def generate_patient_demographics(self):
+        """Generate patient demographic data"""
+        demographics = []
+        
+        for i in range(self.n_patients):
+            age = np.random.normal(65, 15)
+            age = max(18, min(95, int(age)))  # Constrain age between 18-95
+            
+            # Age affects readmission risk
+            readmission_base_prob = 0.05 + (age - 18) * 0.002
+            
+            patient = {
+                'patient_id': f'PT{i+1:06d}',
+                'age': age,
+                'gender': np.random.choice(['M', 'F'], p=[0.48, 0.52]),
+                'race': np.random.choice(['White', 'Black', 'Hispanic', 'Asian', 'Other'], 
+                                      p=[0.6, 0.2, 0.15, 0.04, 0.01]),
+                'insurance_type': np.random.choice(['Medicare', 'Medicaid', 'Private', 'Uninsured'], 
+                                                 p=[0.4, 0.25, 0.3, 0.05]),
+                'zip_code': fake.zipcode(),
+                'marital_status': np.random.choice(['Married', 'Single', 'Divorced', 'Widowed'], 
+                                                 p=[0.5, 0.25, 0.15, 0.1]),
+                'education_level': np.random.choice(['Less than HS', 'High School', 'Some College', 'College+'], 
+                                                  p=[0.2, 0.3, 0.3, 0.2]),
+                'employment_status': np.random.choice(['Employed', 'Unemployed', 'Retired', 'Disabled'], 
+                                                    p=[0.3, 0.1, 0.5, 0.1]),
+                'language': np.random.choice(['English', 'Spanish', 'Other'], p=[0.8, 0.15, 0.05])
+            }
+            demographics.append(patient)
+        
+        return pd.DataFrame(demographics)
+    
+    def generate_clinical_data(self, demographics_df):
+        """Generate clinical encounter data"""
+        clinical_data = []
+        
+        for _, patient in demographics_df.iterrows():
+            # Number of encounters per patient (some have more due to readmissions)
+            n_encounters = np.random.poisson(2) + 1
+            
+            for encounter_num in range(n_encounters):
+                # Admission date
+                if encounter_num == 0:
+                    admission_date = fake.date_between(start_date='-2y', end_date='-1m')
+                else:
+                    # Readmission within 30-365 days
+                    days_since_last = np.random.exponential(45) + 1
+                    admission_date = clinical_data[-1]['admission_date'] + timedelta(days=int(days_since_last))
+                
+                # Length of stay (log-normal distribution)
+                los = max(1, int(np.random.lognormal(1.5, 0.8)))
+                discharge_date = admission_date + timedelta(days=los)
+                
+                # Primary diagnosis
+                primary_dx = np.random.choice(list(self.icd10_codes.keys()))
+                
+                # Secondary diagnoses (comorbidities)
+                n_secondary = np.random.poisson(2)
+                secondary_dx = np.random.choice(list(self.icd10_codes.keys()), size=n_secondary)
+                
+                # Determine if this is a readmission
+                is_readmission = 1 if encounter_num > 0 and (admission_date - clinical_data[-1]['discharge_date']).days <= 30 else 0
+                
+                encounter = {
+                    'encounter_id': f'ENC{len(clinical_data)+1:08d}',
+                    'patient_id': patient['patient_id'],
+                    'admission_date': admission_date,
+                    'discharge_date': discharge_date,
+                    'length_of_stay': los,
+                    'admission_type': np.random.choice(['Emergency', 'Elective', 'Urgent'], p=[0.6, 0.3, 0.1]),
+                    'admission_source': np.random.choice(['Emergency Dept', 'Physician Referral', 'Transfer'], p=[0.7, 0.2, 0.1]),
+                    'primary_diagnosis': primary_dx,
+                    'primary_diagnosis_desc': self.icd10_codes[primary_dx],
+                    'secondary_diagnoses': '|'.join(secondary_dx),
+                    'n_diagnoses': 1 + len(secondary_dx),
+                    'discharge_disposition': np.random.choice(['Home', 'SNF', 'Home Health', 'AMA', 'Transfer'], 
+                                                            p=[0.7, 0.15, 0.1, 0.02, 0.03]),
+                    'drg_code': np.random.randint(1, 999),
+                    'drg_severity': np.random.choice([1, 2, 3, 4], p=[0.3, 0.4, 0.2, 0.1]),
+                    'icu_stay': np.random.choice([0, 1], p=[0.8, 0.2]),
+                    'icu_days': np.random.poisson(2) if np.random.random() < 0.2 else 0,
+                    'readmission_30d': is_readmission
+                }
+                
+                clinical_data.append(encounter)
+        
+        return pd.DataFrame(clinical_data)
+    
+    def generate_vital_signs(self, clinical_df):
+        """Generate vital signs data"""
+        vitals = []
+        
+        for _, encounter in clinical_df.iterrows():
+            # Multiple vital sign measurements per encounter
+            n_measurements = max(1, encounter['length_of_stay'] * 2)
+            
+            for measurement in range(n_measurements):
+                vital = {
+                    'encounter_id': encounter['encounter_id'],
+                    'patient_id': encounter['patient_id'],
+                    'measurement_time': encounter['admission_date'] + timedelta(hours=measurement*12),
+                    'systolic_bp': max(80, int(np.random.normal(130, 20))),
+                    'diastolic_bp': max(50, int(np.random.normal(80, 15))),
+                    'heart_rate': max(40, int(np.random.normal(75, 15))),
+                    'respiratory_rate': max(8, int(np.random.normal(16, 4))),
+                    'temperature': round(np.random.normal(98.6, 1.5), 1),
+                    'oxygen_saturation': max(85, min(100, int(np.random.normal(96, 3))))
+                }
+                vitals.append(vital)
+        
+        return pd.DataFrame(vitals)
+    
+    def generate_lab_results(self, clinical_df):
+        """Generate laboratory results"""
+        labs = []
+        
+        lab_tests = {
+            'Hemoglobin': (12.0, 16.0, 'g/dL'),
+            'Hematocrit': (36.0, 48.0, '%'),
+            'White Blood Cells': (4.5, 11.0, 'K/uL'),
+            'Platelets': (150, 450, 'K/uL'),
+            'Sodium': (136, 145, 'mEq/L'),
+            'Potassium': (3.5, 5.0, 'mEq/L'),
+            'Chloride': (98, 107, 'mEq/L'),
+            'BUN': (7, 20, 'mg/dL'),
+            'Creatinine': (0.6, 1.2, 'mg/dL'),
+            'Glucose': (70, 100, 'mg/dL')
+        }
+        
+        for _, encounter in clinical_df.iterrows():
+            # Number of lab panels during stay
+            n_panels = max(1, encounter['length_of_stay'] // 2)
+            
+            for panel in range(n_panels):
+                for test_name, (min_val, max_val, unit) in lab_tests.items():
+                    # Add some abnormal values for sicker patients
+                    if encounter['icu_stay'] == 1:
+                        # ICU patients more likely to have abnormal values
+                        if np.random.random() < 0.3:
+                            value = np.random.uniform(min_val * 0.5, min_val * 0.9) if np.random.random() < 0.5 else np.random.uniform(max_val * 1.1, max_val * 1.5)
+                        else:
+                            value = np.random.uniform(min_val, max_val)
+                    else:
+                        value = np.random.uniform(min_val, max_val)
+                    
+                    lab = {
+                        'encounter_id': encounter['encounter_id'],
+                        'patient_id': encounter['patient_id'],
+                        'test_date': encounter['admission_date'] + timedelta(days=panel),
+                        'test_name': test_name,
+                        'result_value': round(value, 2),
+                        'reference_range': f'{min_val}-{max_val}',
+                        'unit': unit,
+                        'abnormal_flag': 'H' if value > max_val else ('L' if value < min_val else 'N')
+                    }
+                    labs.append(lab)
+        
+        return pd.DataFrame(labs)
+    
+    def generate_medications(self, clinical_df):
+        """Generate medication data"""
+        medications = []
+        
+        for _, encounter in clinical_df.iterrows():
+            # Number of medications per encounter
+            n_meds = np.random.poisson(5) + 1
+            
+            selected_meds = np.random.choice(self.medications, size=min(n_meds, len(self.medications)), replace=False)
+            
+            for med in selected_meds:
+                medication = {
+                    'encounter_id': encounter['encounter_id'],
+                    'patient_id': encounter['patient_id'],
+                    'medication_name': med,
+                    'dosage': f"{np.random.choice([5, 10, 20, 25, 50, 100])}mg",
+                    'frequency': np.random.choice(['Daily', 'BID', 'TID', 'QID', 'PRN']),
+                    'route': np.random.choice(['PO', 'IV', 'IM', 'SC'], p=[0.7, 0.2, 0.05, 0.05]),
+                    'start_date': encounter['admission_date'],
+                    'end_date': encounter['discharge_date'],
+                    'prescribing_physician': fake.name()
+                }
+                medications.append(medication)
+        
+        return pd.DataFrame(medications)
+    
+    def generate_complete_dataset(self):
+        """Generate complete synthetic healthcare dataset"""
+        print("Generating patient demographics...")
+        demographics = self.generate_patient_demographics()
+        
+        print("Generating clinical encounters...")
+        clinical = self.generate_clinical_data(demographics)
+        
+        print("Generating vital signs...")
+        vitals = self.generate_vital_signs(clinical)
+        
+        print("Generating lab results...")
+        labs = self.generate_lab_results(clinical)
+        
+        print("Generating medication data...")
+        medications = self.generate_medications(clinical)
+        
+        return {
+            'demographics': demographics,
+            'clinical': clinical,
+            'vitals': vitals,
+            'labs': labs,
+            'medications': medications
+        }
+
+# Usage example
+if __name__ == "__main__":
+    generator = HealthcareDataGenerator(n_patients=5000)
+    datasets = generator.generate_complete_dataset()
+    
+    # Save datasets
+    for name, df in datasets.items():
+        df.to_csv(f'data/raw/{name}.csv', index=False)
+        print(f"Saved {name}.csv with {len(df)} records")
+    
+    # Print summary statistics
+    print("\nDataset Summary:")
+    print(f"Patients: {len(datasets['demographics'])}")
+    print(f"Encounters: {len(datasets['clinical'])}")
+    print(f"30-day Readmission Rate: {datasets['clinical']['readmission_30d'].mean():.1%}")
+    print(f"Average Length of Stay: {datasets['clinical']['length_of_stay'].mean():.1f} days")
